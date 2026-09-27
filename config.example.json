@@ -1,0 +1,77 @@
+{
+  "ytmusic_playlist_id": "",
+  "ytmusic_auth_file": null,
+  "paths": {
+    "songs": "songs",
+    "songs_with_synced_lyrics": "songs/synced_lyrics",
+    "songs_without_synced_lyrics": "songs/no_synced_lyrics",
+    "temp": "temp",
+    "database": "db",
+    "logs": "logs"
+  },
+  "download": {
+    "audio_format": "mp3",
+    "audio_quality": "0",
+    "write_info_json": true,
+    "write_thumbnail": true,
+    "convert_thumbnail": "jpg",
+    "write_all_thumbnails": true
+  },
+  "youtube_video_search": {
+    "results_to_fetch": 10,
+    "skip_title_keyword": "lyrics"
+  },
+  "spotify": {
+    "enabled": true,
+    "client_id": "",
+    "client_secret": "",
+    "use_env": true,
+    "market": "IN",
+    "search_limit": 10,
+    "duration_tolerance_seconds": 2,
+    "timeout_seconds": 30,
+    "max_retries": 3,
+    "fail_on_error": false,
+    "artwork": {
+      "enabled": true,
+      "timeout_seconds": 30,
+      "fail_on_error": false
+    }
+  },
+  "lyrics": {
+    "enabled": true,
+    "timeout_seconds": 30,
+    "max_retries": 3,
+    "request_delay_seconds": 0.5,
+    "user_agent": "Phase1AudioDownloader/1.0 (https://github.com/your-user/your-repo)",
+    "fail_on_error": false,
+    "endpoint": "/api/get",
+    "download_only_synced": true,
+    "embed_synced": true,
+    "embed_plain_fallback": true
+  },
+  "retry": {
+    "max_attempts": 3,
+    "backoff_seconds": 2
+  },
+  "yt_dlp_binary": "yt-dlp",
+  "cookies_file": "cookies.txt",
+  "ffmpeg_location": null,
+  "js_runtime": "auto",
+  "js_runtime_path": null,
+  "socket_timeout_seconds": 30,
+  "download_timeout_seconds": 3600,
+  "youtube_search_timeout_seconds": 120,
+  "youtube_metadata_timeout_seconds": 120,
+  "max_description_chars": 0,
+  "artwork": {
+    "og_image_enabled": true,
+    "og_image_timeout_seconds": 30,
+    "force_square": true,
+    "max_dimension": 1200,
+    "jpeg_quality": 98
+  },
+  "filesystem": {
+    "max_filename_length": 180
+  }
+}

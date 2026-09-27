@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local runtime state
+logs/*.log
+temp/*
+db/*.db
+
+# Local secrets
+# Keep cookies.txt as an empty placeholder in the template repository.
+*.cookies
+.env
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+config.json
+
+songs/
+
+cookies.txt
