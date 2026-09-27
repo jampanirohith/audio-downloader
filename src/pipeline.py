@@ -12,6 +12,7 @@ from typing import Any, Callable, Mapping
 
 from .db_playlist import PlaylistDB
 from .db_songs import SONG_COLUMNS, SongsDB
+from .duplicate_checker import DuplicateMatch, find_isrc_duplicate
 from .downloader import AcquisitionResult, Downloader
 from .embedder import embed_final_mp3
 from .artwork import ArtworkError, download_spotify_artwork
@@ -98,6 +99,64 @@ class DatabaseCoordinator:
             conn.close()
 
 
+    def commit_song_and_complete_replacing(self, song_record: Mapping[str, Any], *, previous_serial: int) -> None:
+        """Atomically replace the previously retained row with the current row.
+
+        Physical deletion of the old MP3 is intentionally performed only after this
+        transaction commits, so a bad replacement never destroys the previous row/file.
+        """
+        import sqlite3
+        conn = self._connect()
+        current_serial = int(song_record["serial_number"])
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            previous = conn.execute(
+                "SELECT serial_number, isrc FROM songsdb.songs WHERE serial_number=?",
+                (int(previous_serial),),
+            ).fetchone()
+            if previous is None:
+                raise PipelineError(f"Previous retained serial {previous_serial} no longer exists")
+            if current_serial == int(previous_serial):
+                raise PipelineError("Replacement serial must differ from previous retained serial")
+            current_isrc = str(song_record.get("isrc") or "").strip().upper()
+            previous_isrc = str(previous["isrc"] or "").strip().upper()
+            if not current_isrc or current_isrc != previous_isrc:
+                raise PipelineError("ISRC replacement transaction does not match the duplicate being replaced")
+            if conn.execute(
+                "SELECT 1 FROM songsdb.songs WHERE serial_number=?", (current_serial,)
+            ).fetchone():
+                raise PipelineError(f"songs.db already contains serial {current_serial}")
+            columns = list(SONG_COLUMNS)
+            placeholders = ", ".join("?" for _ in columns)
+            conn.execute("DELETE FROM songsdb.songs WHERE serial_number=?", (int(previous_serial),))
+            conn.execute(
+                f"INSERT INTO songsdb.songs ({', '.join(columns)}) VALUES ({placeholders})",
+                [song_record.get(column) for column in columns],
+            )
+            cur_current = conn.execute(
+                """UPDATE main.playlist_entries
+                   SET status='completed', error_message=NULL, updated_at=CURRENT_TIMESTAMP
+                   WHERE serial_number=? AND status='pending'""",
+                (current_serial,),
+            )
+            if cur_current.rowcount != 1:
+                raise PipelineError("Current playlist entry was not pending during replacement commit")
+            cur_previous = conn.execute(
+                """UPDATE main.playlist_entries
+                   SET status='pending', error_message=NULL, updated_at=CURRENT_TIMESTAMP
+                   WHERE serial_number=?""",
+                (int(previous_serial),),
+            )
+            if cur_previous.rowcount != 1:
+                raise PipelineError("Previous playlist entry could not be returned to pending")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+
 class Pipeline:
     def __init__(
         self,
@@ -109,6 +168,7 @@ class Pipeline:
         youtube_finder: YouTubeFinder,
         spotify_client: Any = None,
         lrclib_client: Any = None,
+        duplicate_resolver: Callable[[Mapping[str, Any], NormalizedMetadata, DuplicateMatch], str] | None = None,
         validator_func: Callable[..., None] = validate_final_mp3,
         embedder_func: Callable[..., None] = embed_final_mp3,
         logger: logging.Logger | None = None,
@@ -121,6 +181,7 @@ class Pipeline:
         self.youtube_finder = youtube_finder
         self.spotify_client = spotify_client
         self.lrclib_client = lrclib_client
+        self.duplicate_resolver = duplicate_resolver or self._prompt_duplicate_resolution
         self.validator_func = validator_func
         self.embedder_func = embedder_func
         self.logger = logger or logging.getLogger("phase1.pipeline")
@@ -155,6 +216,51 @@ class Pipeline:
 
     def _cleanup_temp(self, serial: int) -> None:
         shutil.rmtree(self._temp_dir(serial), ignore_errors=False)
+
+    @staticmethod
+    def _prompt_duplicate_resolution(
+        entry: Mapping[str, Any], metadata: NormalizedMetadata, duplicate: DuplicateMatch
+    ) -> str:
+        print("\nDUPLICATE ISRC DETECTED")
+        print(f"ISRC: {duplicate.isrc}")
+        print("\nCURRENT ENTRY")
+        print(f"  Serial : {entry.get('serial_number')}")
+        print(f"  Title  : {metadata.title}")
+        print(f"  Artist : {metadata.artist}")
+        print(f"  Album  : {metadata.album or '-'}")
+        print("\nEXISTING RETAINED SONG")
+        print(f"  Serial : {duplicate.serial_number}")
+        print(f"  Title  : {duplicate.title or '-'}")
+        print(f"  Artist : {duplicate.artist or '-'}")
+        print(f"  Album  : {duplicate.album or '-'}")
+        print(f"  MP3    : {duplicate.mp3_path or '-'}")
+        print("\nChoose:")
+        print("  1. Keep previous")
+        print("  2. Keep current")
+        while True:
+            choice = input("Selection [1/2]: ").strip()
+            if choice == "1":
+                return "keep_previous"
+            if choice == "2":
+                return "keep_current"
+            print("Please enter 1 or 2.")
+
+
+    def _check_isrc_duplicate(self, entry: Mapping[str, Any], metadata: NormalizedMetadata) -> DuplicateMatch | None:
+        cfg = self.config.get("duplicate_detection", {})
+        if not isinstance(cfg, Mapping) or not bool(cfg.get("enabled", True)):
+            return None
+        if str(cfg.get("identifier", "isrc")).lower() != "isrc":
+            raise PipelineError("duplicate_detection.identifier must be 'isrc'")
+        if not metadata.isrc:
+            self.logger.info("serial=%s no usable ISRC; duplicate detection skipped", entry.get("serial_number"))
+            return None
+        return find_isrc_duplicate(
+            self.songs_db,
+            isrc=metadata.isrc,
+            exclude_serial=int(entry["serial_number"]),
+        )
+
 
     def _resolve_project_path(self, value: str) -> Path:
         p = Path(value)
@@ -202,6 +308,7 @@ class Pipeline:
             "artists_json": dump_json(metadata.artists),
             "album": metadata.album,
             "album_artist": metadata.album_artist,
+            "isrc": metadata.isrc or (spotify.isrc if spotify else None),
             "track_number": metadata.track_number,
             "disc_number": metadata.disc_number,
             "release_date": metadata.release_date,
@@ -380,6 +487,8 @@ class Pipeline:
         final_json_path: Path | None = None
         final_lyrics_path: Path | None = None
         committed = False
+        duplicate_previous_serial: int | None = None
+        duplicate_resolution: str | None = None
 
         try:
             if not entry.get("ytm_url"):
@@ -478,6 +587,34 @@ class Pipeline:
                         raise
                     self.logger.warning("serial=%s Spotify enrichment skipped: %s", serial, exc)
                     self._write_manifest(serial, spotify_error=f"{type(exc).__name__}: {exc}")
+
+            duplicate = self._check_isrc_duplicate(entry, metadata)
+            if duplicate is not None:
+                decision = self.duplicate_resolver(entry, metadata, duplicate)
+                if decision == "keep_previous":
+                    self.playlist_db.update_status(
+                        serial,
+                        "duplicate",
+                        error_message=f"Duplicate ISRC {duplicate.isrc}; kept retained serial {duplicate.serial_number}",
+                    )
+                    self._write_manifest(
+                        serial,
+                        stage="duplicate_keep_previous",
+                        duplicate_isrc=duplicate.isrc,
+                        duplicate_of_serial=duplicate.serial_number,
+                    )
+                    self._cleanup_temp(serial)
+                    return "duplicate"
+                if decision != "keep_current":
+                    raise PipelineError(f"Invalid duplicate resolution: {decision!r}")
+                duplicate_previous_serial = duplicate.serial_number
+                duplicate_resolution = "keep_current"
+                self._write_manifest(
+                    serial,
+                    stage="duplicate_keep_current",
+                    duplicate_isrc=duplicate.isrc,
+                    replacing_serial=duplicate.serial_number,
+                )
 
             query, video = self.youtube_finder.find(title=metadata.title, album=metadata.album)
             self._write_manifest(serial, stage="youtube_selected", youtube_query=query, yt_video_id=video.video_id if video else None)
@@ -582,7 +719,7 @@ class Pipeline:
             # Build the sidecar before promotion. It is the canonical home for the detailed
             # source/API metadata that should not clutter the MP3's player-facing ID3 tags.
             json_payload = build_song_sidecar(
-                project_version="2.0",
+                project_version="2.1",
                 playlist_entry=entry,
                 metadata=metadata,
                 source_info=info,
@@ -610,6 +747,12 @@ class Pipeline:
                 mp3_sha256=digest,
                 lrc_path=relative_lrc,
                 json_path=relative_json,
+                duplicate={
+                    "detected": duplicate_previous_serial is not None,
+                    "isrc": metadata.isrc,
+                    "replaced_serial": duplicate_previous_serial,
+                    "resolution": duplicate_resolution,
+                },
             )
             write_sidecar(final_json_path, json_payload)
             self._write_manifest(
@@ -623,6 +766,12 @@ class Pipeline:
                 final_path=final_path.relative_to(self.project_root).as_posix(),
                 lyrics_path=relative_lrc,
                 json_path=relative_json,
+                duplicate={
+                    "detected": duplicate_previous_serial is not None,
+                    "isrc": metadata.isrc,
+                    "replaced_serial": duplicate_previous_serial,
+                    "resolution": duplicate_resolution,
+                },
             )
 
             record = self._playlist_song_record(
@@ -644,14 +793,25 @@ class Pipeline:
                 lyrics_path=final_lyrics_path,
                 lyrics_status=lyrics_status,
             )
-            self.coordinator.commit_song_and_complete(record)
+            if duplicate_previous_serial is None:
+                self.coordinator.commit_song_and_complete(record)
+            else:
+                self.coordinator.commit_song_and_complete_replacing(
+                    record, previous_serial=duplicate_previous_serial
+                )
             committed = True
-            self._write_manifest(serial, stage="database_committed")
+            self._write_manifest(
+                serial,
+                stage="database_committed",
+                replaced_serial=duplicate_previous_serial,
+            )
 
             keep = {final_path, final_json_path}
             if final_lyrics_path is not None:
                 keep.add(final_lyrics_path)
             self._cleanup_previous_serial_files(serial, keep=keep)
+            if duplicate_previous_serial is not None:
+                self._cleanup_previous_serial_files(duplicate_previous_serial, keep=set())
             try:
                 self._cleanup_temp(serial)
             except Exception:
@@ -704,6 +864,7 @@ class Pipeline:
     def run(self, *, max_entries: int | None = None) -> dict[str, int]:
         processed = 0
         completed = 0
+        duplicates = 0
         errors = 0
         while max_entries is None or processed < max_entries:
             outcome = self.process_one()
@@ -712,9 +873,11 @@ class Pipeline:
             processed += 1
             if outcome.status == "completed":
                 completed += 1
+            elif outcome.status == "duplicate":
+                duplicates += 1
             else:
                 errors += 1
-        return {"processed": processed, "completed": completed, "errors": errors}
+        return {"processed": processed, "completed": completed, "duplicates": duplicates, "errors": errors}
 
     def check_invariants(self) -> list[str]:
         errors: list[str] = []
@@ -738,6 +901,15 @@ class Pipeline:
                     errors.append(f"Completed playlist serial {serial} points to missing LRC: {song['lyrics_path']}")
             elif serial in song_rows and row["status"] != "completed":
                 errors.append(f"Playlist serial {serial} has a retained song but status is {row['status']!r}")
+        seen_isrc: dict[str, int] = {}
+        for serial, song in song_rows.items():
+            isrc = str(song.get("isrc") or "").strip().upper()
+            if isrc:
+                prior = seen_isrc.get(isrc)
+                if prior is not None and prior != serial:
+                    errors.append(f"Duplicate retained ISRC {isrc}: serials {prior} and {serial}")
+                else:
+                    seen_isrc[isrc] = serial
         for serial in song_rows:
             if serial not in playlist_rows:
                 errors.append(f"songs.db serial {serial} has no corresponding playlist entry")

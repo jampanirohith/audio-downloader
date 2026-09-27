@@ -8,6 +8,8 @@ from typing import Any, Mapping
 import requests
 from requests import RequestException
 
+from .metadata import normalize_isrc
+
 SPOTIFY_ACCOUNTS_URL = "https://accounts.spotify.com/api/token"
 SPOTIFY_API_URL = "https://api.spotify.com/v1"
 
@@ -303,7 +305,7 @@ class SpotifyClient:
                 duration_delta_ms=delta,
                 explicit=bool(track.get("explicit")) if track.get("explicit") is not None else None,
                 popularity=int(track["popularity"]) if isinstance(track.get("popularity"), (int, float)) else None,
-                isrc=(str(external_ids.get("isrc") or "").strip() or None),
+                isrc=normalize_isrc(external_ids.get("isrc")),
                 track_number=int(track["track_number"]) if isinstance(track.get("track_number"), (int, float)) else None,
                 disc_number=int(track["disc_number"]) if isinstance(track.get("disc_number"), (int, float)) else None,
                 search_query=query,
@@ -327,6 +329,8 @@ def apply_spotify_metadata(metadata: Any, result: SpotifyResult) -> Any:
         changes["primary_artist"] = result.artists[0]
     if result.album_name:
         changes["album"] = result.album_name
+    if result.isrc:
+        changes["isrc"] = normalize_isrc(result.isrc)
     if result.album_artist_string:
         changes["album_artist"] = result.album_artist_string
     if result.album_release_date:

@@ -84,6 +84,14 @@ def validate_config(config: dict[str, Any]) -> None:
     if int(spotify.get("timeout_seconds", 30)) < 5:
         raise SystemExit("spotify.timeout_seconds must be >= 5")
 
+    duplicate_detection = config.get("duplicate_detection", {})
+    if not isinstance(duplicate_detection, dict):
+        raise SystemExit("config.duplicate_detection must be an object")
+    if str(duplicate_detection.get("identifier", "isrc")).lower() != "isrc":
+        raise SystemExit("duplicate_detection.identifier must be 'isrc'")
+    if str(duplicate_detection.get("on_duplicate", "prompt")).lower() != "prompt":
+        raise SystemExit("duplicate_detection.on_duplicate must be 'prompt'")
+
     spotify_artwork = spotify.get("artwork", {})
     if not isinstance(spotify_artwork, dict):
         raise SystemExit("spotify.artwork must be an object")
@@ -189,6 +197,10 @@ def command_doctor(root: Path, config: dict[str, Any]) -> int:
             errors.append("Spotify enrichment is enabled but client_id/client_secret are not configured")
     else:
         print("Spotify enrichment: disabled")
+    duplicate_cfg = config.get("duplicate_detection", {}) if isinstance(config.get("duplicate_detection", {}), dict) else {}
+    print(f"ISRC duplicate detection: {'enabled' if bool(duplicate_cfg.get('enabled', True)) else 'disabled'}")
+    if bool(duplicate_cfg.get("enabled", True)) and str(duplicate_cfg.get("identifier", "isrc")).lower() != "isrc":
+        errors.append("duplicate_detection.identifier must be 'isrc'")
     lyrics_cfg = config.get("lyrics", {}) if isinstance(config.get("lyrics", {}), dict) else {}
     print(f"LRCLIB synced lyrics: {'enabled' if bool(lyrics_cfg.get('enabled', True)) else 'disabled'}")
 
@@ -210,7 +222,7 @@ def command_doctor(root: Path, config: dict[str, Any]) -> int:
 
 def print_status(playlist_db: PlaylistDB, songs_db: SongsDB) -> None:
     counts = playlist_db.counts()
-    for key in ("total", "pending", "completed", "error"):
+    for key in ("total", "pending", "completed", "duplicate", "error"):
         print(f"{key:10s}: {counts[key]}")
     print(f"Retained songs: {songs_db.count()}")
 

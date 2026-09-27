@@ -6,8 +6,8 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 3
-VALID_STATUSES = ("pending", "completed", "error")
+SCHEMA_VERSION = 4
+VALID_STATUSES = ("pending", "completed", "duplicate", "error")
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS playlist_entries (
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS playlist_entries (
     duration INTEGER,
     ytm_playlist_item_json TEXT,
     status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'completed', 'error')),
+        CHECK (status IN ('pending', 'completed', 'duplicate', 'error')),
     error_message TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -204,6 +204,7 @@ class PlaylistDB:
             "total": sum(counts.values()),
             "pending": counts.get("pending", 0),
             "completed": counts.get("completed", 0),
+            "duplicate": counts.get("duplicate", 0),
             "error": counts.get("error", 0),
         }
 

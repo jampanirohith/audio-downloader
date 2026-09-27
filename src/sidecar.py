@@ -42,6 +42,7 @@ def build_song_sidecar(
     mp3_sha256: str,
     lrc_path: str | None,
     json_path: str,
+    duplicate: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     def obj(value: Any) -> Any:
         return _jsonable(value)
@@ -76,6 +77,7 @@ def build_song_sidecar(
             "selected": youtube_video is not None,
             "metadata": obj(youtube_video) if youtube_video is not None else None,
         },
+        "duplicate_detection": dict(duplicate or {}),
         "lyrics": {
             "status": "synced" if lyrics is not None else lyrics_status,
             "lrc_path": lrc_path,

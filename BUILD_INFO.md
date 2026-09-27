@@ -1,24 +1,28 @@
-# Final Build Information
+# Build Information
 
-Release: Phase 1 current corrected build
+## Release
+Current build with ISRC-only duplicate detection restored.
 
-## Locked behavior
+## Verified
+- 29 pytest tests passing.
+- Python compilation succeeds for source, scripts and tests.
+- `playlist.db` schema user_version=4.
+- `songs.db` schema user_version=7.
+- `songs.isrc` column and partial non-NULL index are present.
+- `python main.py --status` succeeds on a fresh build.
+- `python main.py --check-invariants` succeeds on a fresh build.
+- Archive is rebuilt from the verified working tree.
 
-- No duplicate detection, duplicate matching, or duplicate resolution.
-- Spotify enrichment is optional and controlled by `config.json -> spotify.enabled`.
-- Spotify search uses `title + album` and chooses the first returned track whose duration is within the configured tolerance.
-- Spotify ISRC is metadata only.
-- When Spotify is selected, its largest returned album image is downloaded and preserved byte-for-byte. No crop, resize, recompress, or visual transformation is applied.
-- LRCLIB uses only `GET /api/get`. `/api/search` is never called.
-- Only synchronized LRCLIB lyrics are saved as `.lrc`.
-- Synced lyrics are embedded in the MP3 as ID3 SYLT plus USLT compatibility text.
-- Every finalized MP3 has a same-basename `.json` sidecar containing detailed/raw metadata and integrity information.
-- The MP3 contains only concise player-facing metadata, important YTMusic/YouTube/Spotify IDs/URLs, artwork, and lyrics.
-- Source descriptions, age-limit information, channel details, raw API payloads, and extractor internals remain in the sidecar JSON.
+## Duplicate behavior
+- Identifier: normalized ISRC only.
+- Spotify ISRC is preferred when matched; source ISRC is the fallback.
+- Missing/invalid ISRC skips duplicate matching.
+- No title/artist/album/duration/hash/fuzzy fallback.
+- Duplicate resolution: interactive keep previous / keep current.
 
-## Verification
-
-- Offline regression suite: 25 passed.
-- Python bytecode compilation: passed.
-- Package extraction/re-test: performed before release packaging.
-- Live authenticated YouTube Music/Spotify/LRCLIB network execution is intentionally not claimed from the sandbox.
+## Important current integrations
+- Spotify search: title + album; first duration match within configured tolerance.
+- Spotify album artwork: largest returned image, bytes preserved unchanged.
+- LRCLIB: GET /api/get only; synchronized lyrics only.
+- MP3: concise player-facing metadata, important IDs/URLs, ISRC, artwork, synchronized lyrics.
+- JSON sidecar: detailed/raw source and API metadata.

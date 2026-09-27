@@ -1,17 +1,12 @@
-# Final Audit — Current Build
+# Final Audit — Current Release
 
-## Rules verified
-
-1. No duplicate detection or duplicate resolution.
-2. Spotify optional and metadata-only; ISRC never participates in identity or matching.
-3. Spotify selected track = first duration-matching result in returned order.
-4. Largest Spotify artwork is downloaded and preserved without transformation.
-5. LRCLIB client calls only `/api/get`.
-6. Only synced LRCLIB lyrics produce `.lrc` files.
-7. Synced lyrics are embedded as SYLT + USLT.
-8. Each MP3 has a same-basename JSON sidecar with detailed metadata.
-9. MP3 contains concise metadata only; no raw GEOB/COMM/source-description dump.
-10. YTMusic source video ID and selected YouTube video ID are preserved when available.
-11. Final MP3 validation happens before SHA-256 and database commit.
-
-Offline test verification is performed by `pytest -q`.
+1. Permanent playlist serials are preserved.
+2. ISRC is the only duplicate identifier.
+3. Missing/invalid ISRC skips duplicate lookup.
+4. Spotify ISRC takes precedence over source ISRC when Spotify enrichment matches.
+5. Keep-previous and keep-current duplicate resolution are covered by transaction-aware logic.
+6. Keep-current never destroys the previous retained file before the replacement is validated and committed.
+7. Duplicate status is preserved across re-ingestion of the same usable source item.
+8. Canonical ISRC is written to `songs.isrc`, indexed, and embedded as ID3 `TSRC` when available.
+9. LRCLIB remains `/api/get` only.
+10. Spotify artwork remains the largest API image, preserved unchanged.

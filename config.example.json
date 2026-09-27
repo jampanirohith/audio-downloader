@@ -1,5 +1,5 @@
 {
-  "ytmusic_playlist_id": "",
+  "ytmusic_playlist_id": "YOUR_PLAYLIST_ID",
   "ytmusic_auth_file": null,
   "paths": {
     "songs": "songs",
@@ -22,7 +22,7 @@
     "skip_title_keyword": "lyrics"
   },
   "spotify": {
-    "enabled": true,
+    "enabled": false,
     "client_id": "",
     "client_secret": "",
     "use_env": true,
@@ -73,5 +73,10 @@
   },
   "filesystem": {
     "max_filename_length": 180
+  },
+  "duplicate_detection": {
+    "enabled": true,
+    "identifier": "isrc",
+    "on_duplicate": "prompt"
   }
 }

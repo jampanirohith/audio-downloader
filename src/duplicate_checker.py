@@ -1,16 +1,39 @@
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Mapping
 
-from .db_songs import SongsDB
+from .metadata import normalize_isrc
 
 
-class DuplicateChecker:
-    def __init__(self, songs_db: SongsDB) -> None:
-        self.songs_db = songs_db
+@dataclass(frozen=True)
+class DuplicateMatch:
+    serial_number: int
+    isrc: str
+    title: str | None
+    artist: str | None
+    album: str | None
+    mp3_path: str | None
 
-    def find_duplicate(self, isrc: str | None) -> dict[str, Any] | None:
-        # Locked Phase 1 rule: ISRC is the only duplicate key. NULL means no duplicate lookup.
-        if isrc is None:
-            return None
-        return self.songs_db.find_by_isrc(isrc)
+
+def find_isrc_duplicate(
+    songs_db: Any,
+    *,
+    isrc: str | None,
+    exclude_serial: int | None = None,
+) -> DuplicateMatch | None:
+    """Return one retained song with the same normalized ISRC, excluding the current serial."""
+    normalized = normalize_isrc(isrc)
+    if not normalized:
+        return None
+    row = songs_db.find_by_isrc(normalized, exclude_serial=exclude_serial)
+    if not row:
+        return None
+    return DuplicateMatch(
+        serial_number=int(row["serial_number"]),
+        isrc=normalized,
+        title=row.get("title"),
+        artist=row.get("artist"),
+        album=row.get("album"),
+        mp3_path=row.get("mp3_path"),
+    )

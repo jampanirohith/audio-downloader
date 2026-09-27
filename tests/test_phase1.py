@@ -113,7 +113,7 @@ def video_result() -> VideoResult:
 def spotify_result() -> SpotifyResult:
     raw = {
         "id": "SPOT1", "name": "Song A", "duration_ms": 60000, "track_number": 2, "disc_number": 1,
-        "explicit": False, "popularity": 50, "external_ids": {"isrc": "US-SPOT-123"},
+        "explicit": False, "popularity": 50, "external_ids": {"isrc": "USSPT2400001"},
         "external_urls": {"spotify": "https://open.spotify.com/track/SPOT1"}, "uri": "spotify:track:SPOT1",
         "artists": [{"name": "Artist A", "id": "ART1", "external_urls": {"spotify": "https://open.spotify.com/artist/ART1"}}],
         "album": {"name": "Album A", "id": "ALB1", "album_type": "album", "release_date": "2024-02-03",
@@ -143,7 +143,7 @@ def spotify_result() -> SpotifyResult:
         album_images=[SpotifyImage("https://i.scdn.co/image/abc300", 300, 300), SpotifyImage("https://i.scdn.co/image/abc640", 640, 640)],
         album_label="Publisher A", album_copyrights=["(P) 2024 Publisher A"],
         duration_ms=60000, duration_seconds=60, duration_delta_ms=0, explicit=False, popularity=50,
-        isrc="US-SPOT-123", track_number=2, disc_number=1, search_query="Song A Album A", search_result_index=1,
+        isrc="USSPT2400001", track_number=2, disc_number=1, search_query="Song A Album A", search_result_index=1,
         raw=raw, album_raw=album_raw,
     )
 
@@ -284,7 +284,7 @@ def test_embedder_writes_concise_metadata_and_synced_lyrics(tmp_path: Path):
     )
     tags = ID3(out)
     assert tags.getall("TIT2") and tags.getall("TPE1") and tags.getall("TALB")
-    assert tags.getall("TSRC")[0].text[0] == "US-SPOT-123"
+    assert tags.getall("TSRC")[0].text[0] == "USSPT2400001"
     assert tags.getall("SYLT") and tags.getall("USLT")
     assert len(tags.getall("APIC")) == 1
     assert not tags.getall("COMM") and not tags.getall("GEOB")
@@ -547,3 +547,140 @@ def test_pipeline_uses_largest_spotify_artwork_without_reencoding(monkeypatch, t
     payload=json.loads(sidecar.read_text(encoding="utf-8"))
     assert payload["artwork"]["provider"] == "spotify"
     assert payload["artwork"]["sha256"]
+
+
+
+def test_isrc_normalization_is_strict_and_stable():
+    from src.metadata import normalize_isrc
+    assert normalize_isrc("us-spt-24-00001") == "USSPT2400001"
+    assert normalize_isrc("ISRC: USSPT2400001") == "USSPT2400001"
+    assert normalize_isrc("not-an-isrc") is None
+
+
+def test_songs_db_find_by_isrc_excludes_current_serial(tmp_path: Path):
+    db = SongsDB(tmp_path / "songs.db")
+    db.insert_song({
+        "serial_number": 1,
+        "isrc": "USSPT2400001",
+        "title": "Song A",
+        "source_info_json": "{}",
+        "mp3_path": "songs/no_synced_lyrics/001_song.mp3",
+    })
+    assert db.find_by_isrc("USSPT2400001")["serial_number"] == 1
+    assert db.find_by_isrc("USSPT2400001", exclude_serial=1) is None
+
+
+def _make_pipeline_for_duplicate_test(tmp_path: Path, *, resolver):
+    playlist_db = PlaylistDB(tmp_path / "db" / "playlist.db")
+    songs_db = SongsDB(tmp_path / "db" / "songs.db")
+    playlist_db.insert_entry(
+        serial_number=1, playlist_position=1, ytm_playlist_id="PL1", ytm_video_id="YTM_OLD",
+        ytm_url="https://music.youtube.com/watch?v=YTM_OLD", title="Song A", artist="Artist A", album="Album A", duration=1,
+        ytm_playlist_item_json=json.dumps(playlist_item()), status="completed",
+    )
+    playlist_db.insert_entry(
+        serial_number=2, playlist_position=2, ytm_playlist_id="PL1", ytm_video_id="YTM_NEW",
+        ytm_url="https://music.youtube.com/watch?v=YTM_NEW", title="Song A", artist="Artist A", album="Album A", duration=1,
+        ytm_playlist_item_json=json.dumps(playlist_item()), status="pending",
+    )
+    old_dir = tmp_path / "songs" / "no_synced_lyrics"
+    old_dir.mkdir(parents=True, exist_ok=True)
+    old_mp3 = old_dir / "001_Song_A_Artist_A.mp3"
+    make_mp3(old_mp3, 1)
+    old_json = old_mp3.with_suffix(".json")
+    old_json.write_text("{}", encoding="utf-8")
+    songs_db.insert_song({
+        "serial_number": 1, "isrc": "USSPT2400001", "title": "Song A", "artist": "Artist A", "album": "Album A",
+        "source_info_json": "{}", "mp3_path": old_mp3.relative_to(tmp_path).as_posix(),
+    })
+
+    def acquire(**kwargs):
+        temp = Path(kwargs["temp_dir"]); temp.mkdir(parents=True, exist_ok=True)
+        master = temp / "master.mp3"; make_mp3(master, 1)
+        info = temp / "master.info.json"; info.write_text(json.dumps(source_info()), encoding="utf-8")
+        art = temp / "master.jpg"; Image.new("RGB", (640, 640), "blue").save(art)
+        return AcquisitionResult(temp, master, info, art, 1, "https://yt.example/art", 640, 640)
+
+    fake_spotify = SimpleNamespace(search_track=lambda **kwargs: spotify_result())
+    fake_downloader = SimpleNamespace(acquire=acquire)
+    fake_finder = SimpleNamespace(find=lambda **kwargs: ("Song A Album A official video song", video_result()))
+    config = {
+        "paths": {"songs": "songs", "songs_with_synced_lyrics": "songs/synced_lyrics", "songs_without_synced_lyrics": "songs/no_synced_lyrics", "temp": "temp", "database": "db"},
+        "retry": {"max_attempts": 1, "backoff_seconds": 0},
+        "spotify": {"enabled": True, "artwork": {"enabled": False}},
+        "lyrics": {"enabled": False},
+        "duplicate_detection": {"enabled": True, "identifier": "isrc", "on_duplicate": "prompt"},
+        "filesystem": {"max_filename_length": 180},
+    }
+    pipeline = Pipeline(
+        project_root=tmp_path, config=config, playlist_db=playlist_db, songs_db=songs_db,
+        downloader=fake_downloader, youtube_finder=fake_finder, spotify_client=fake_spotify,
+        lrclib_client=None, duplicate_resolver=resolver,
+    )
+    return pipeline, playlist_db, songs_db, old_mp3, old_json
+
+
+def test_duplicate_isrc_keep_previous_marks_current_duplicate(tmp_path: Path):
+    youtube_called = False
+    def resolver(entry, metadata, duplicate):
+        assert duplicate.isrc == "USSPT2400001"
+        return "keep_previous"
+    pipeline, playlist_db, songs_db, old_mp3, old_json = _make_pipeline_for_duplicate_test(tmp_path, resolver=resolver)
+    original_finder = pipeline.youtube_finder
+    def unexpected_find(**kwargs):
+        nonlocal youtube_called
+        youtube_called = True
+        raise AssertionError("YouTube should not be searched after keep-previous duplicate resolution")
+    pipeline.youtube_finder = SimpleNamespace(find=unexpected_find)
+    outcome = pipeline.process_one()
+    assert outcome.status == "duplicate"
+    assert youtube_called is False
+    assert playlist_db.get_by_serial(2)["status"] == "duplicate"
+    assert songs_db.get_by_serial(1) is not None
+    assert songs_db.get_by_serial(2) is None
+    assert old_mp3.exists() and old_json.exists()
+    assert pipeline.check_invariants() == []
+
+
+def test_duplicate_isrc_keep_current_replaces_retained_song(tmp_path: Path):
+    pipeline, playlist_db, songs_db, old_mp3, old_json = _make_pipeline_for_duplicate_test(
+        tmp_path, resolver=lambda entry, metadata, duplicate: "keep_current"
+    )
+    outcome = pipeline.process_one()
+    assert outcome.status == "completed"
+    assert playlist_db.get_by_serial(1)["status"] == "pending"
+    assert playlist_db.get_by_serial(2)["status"] == "completed"
+    assert songs_db.get_by_serial(1) is None
+    current = songs_db.get_by_serial(2)
+    assert current is not None and current["isrc"] == "USSPT2400001"
+    assert not old_mp3.exists() and not old_json.exists()
+    assert pipeline.check_invariants() == []
+
+
+
+def test_legacy_spotify_isrc_migrates_to_canonical_isrc(tmp_path: Path):
+    import sqlite3
+    legacy = tmp_path / "legacy.db"
+    conn = sqlite3.connect(legacy)
+    conn.execute("CREATE TABLE songs (serial_number INTEGER PRIMARY KEY, title TEXT NOT NULL, spotify_isrc TEXT, source_info_json TEXT NOT NULL, mp3_path TEXT NOT NULL)")
+    conn.execute("INSERT INTO songs(serial_number,title,spotify_isrc,source_info_json,mp3_path) VALUES(1,'Song A','us-spt-24-00001','{}','song.mp3')")
+    conn.execute("PRAGMA user_version=1")
+    conn.commit(); conn.close()
+    db = SongsDB(legacy)
+    assert db.get_by_serial(1)["isrc"] == "USSPT2400001"
+
+
+def test_duplicate_status_survives_reingestion(tmp_path: Path):
+    db = PlaylistDB(tmp_path / "playlist.db")
+    db.insert_entry(
+        serial_number=1, playlist_position=1, ytm_playlist_id="PL1", ytm_video_id="YTM123",
+        ytm_url="https://music.youtube.com/watch?v=YTM123", title="Song A", artist="Artist A", album="Album A", duration=60,
+        ytm_playlist_item_json=json.dumps(playlist_item()), status="duplicate",
+        error_message="Duplicate ISRC USSPT2400001",
+    )
+    class FakeYTMusic:
+        def get_playlist(self, *args, **kwargs):
+            return {"title": "Test", "tracks": [playlist_item()]}
+    summary = PlaylistIngestor(db, ytmusic_factory=lambda *a: FakeYTMusic()).ingest("PL1")
+    assert summary["total_entries"] == 1
+    assert db.get_by_serial(1)["status"] == "duplicate"

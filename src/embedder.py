@@ -40,7 +40,7 @@ from .lrclib import LyricsResult, TIMESTAMP_RE
 from .spotify import SpotifyResult
 
 
-METADATA_EXPORT_VERSION = "5"
+METADATA_EXPORT_VERSION = "6"
 LRC_OFFSET_RE = re.compile(r"^\[offset:([+-]?\d+)\]$", re.IGNORECASE)
 LRC_METADATA_RE = re.compile(r"^\[[A-Za-z]{2,8}:[^\]]*\]$")
 
@@ -158,6 +158,7 @@ def _add_lyrics(tags: ID3, lyrics: LyricsResult) -> int:
 
 
 def _add_core_metadata(tags: ID3, metadata: Any, spotify: SpotifyResult | None) -> None:
+    effective_isrc = getattr(metadata, "isrc", None) or (spotify.isrc if spotify is not None else None)
     tags.add(TIT2(encoding=3, text=[metadata.title]))
     tags.add(TPE1(encoding=3, text=[metadata.artist]))
     album_artist = metadata.album_artist or (spotify.artist_string if spotify is not None else None)
@@ -189,8 +190,8 @@ def _add_core_metadata(tags: ID3, metadata: Any, spotify: SpotifyResult | None) 
         tags.add(TENC(encoding=3, text=[metadata.encoder]))
     if metadata.duration is not None:
         tags.add(TLEN(encoding=3, text=[str(int(metadata.duration) * 1000)]))
-    if spotify is not None and spotify.isrc:
-        tags.add(TSRC(encoding=3, text=[spotify.isrc]))
+    if effective_isrc:
+        tags.add(TSRC(encoding=3, text=[effective_isrc]))
 
 
 def embed_final_mp3(
@@ -252,6 +253,7 @@ def embed_final_mp3(
         _add_txxx(tags, "yt_video_title", getattr(video, "title", None) if video is not None else None)
         _add_txxx(tags, "spotify_track_id", spotify.track_id if spotify else None)
         _add_txxx(tags, "spotify_album_id", spotify.album_id if spotify else None)
+        _add_txxx(tags, "isrc", getattr(metadata, "isrc", None) or (spotify.isrc if spotify else None))
         _add_txxx(tags, "spotify_isrc", spotify.isrc if spotify else None)
         _add_txxx(tags, "lyrics_status", "synced" if lyrics else lyrics_status)
 

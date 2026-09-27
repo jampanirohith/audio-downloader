@@ -143,6 +143,8 @@ def validate_final_mp3(
     if id3.getall("COMM"):
         raise ValidationError("COMM source-description metadata is not allowed in the final MP3")
 
+    effective_isrc = getattr(metadata, "isrc", None) or (spotify.isrc if spotify else None)
+
     standard = {
         "TIT2": metadata.title,
         "TPE1": metadata.artist,
@@ -175,7 +177,7 @@ def validate_final_mp3(
 
     custom = _txxx(id3)
     expected_custom: dict[str, str] = {
-        "metadata_export_version": "5",
+        "metadata_export_version": "6",
         "serial_number": str(playlist_entry["serial_number"]),
         "playlist_position": str(playlist_entry["playlist_position"]),
     }
@@ -186,6 +188,7 @@ def validate_final_mp3(
         "yt_video_title": video.title if video is not None else None,
         "spotify_track_id": spotify.track_id if spotify else None,
         "spotify_album_id": spotify.album_id if spotify else None,
+        "isrc": effective_isrc,
         "spotify_isrc": spotify.isrc if spotify else None,
         "lyrics_status": "synced" if lyrics is not None else lyrics_status,
     }
@@ -195,13 +198,12 @@ def validate_final_mp3(
         if actual != value:
             raise ValidationError(f"TXXX:{key} missing or incorrect: expected {value!r}, got {actual!r}")
 
-    # Spotify ISRC is a normal tag, not a duplicate-detection key.
     actual_tsrc = _first_text(id3, "TSRC")
-    if spotify is not None and spotify.isrc:
-        if actual_tsrc != spotify.isrc:
+    if effective_isrc:
+        if actual_tsrc != effective_isrc:
             raise ValidationError("TSRC is missing or incorrect")
     elif actual_tsrc is not None:
-        raise ValidationError("TSRC must be absent when Spotify does not provide an ISRC")
+        raise ValidationError("TSRC must be absent when no ISRC is available")
 
     # Machine-readable source IDs.
     expected_ytm_id = playlist_entry.get("ytm_video_id")
@@ -246,7 +248,7 @@ def validate_final_mp3(
     # one of the small player-facing fields documented by the project.
     allowed_txxx = {
         "metadata_export_version", "serial_number", "playlist_position", "ytm_playlist_id", "ytm_video_id",
-        "yt_video_id", "yt_video_title", "spotify_track_id", "spotify_album_id", "spotify_isrc",
+        "yt_video_id", "yt_video_title", "spotify_track_id", "spotify_album_id", "isrc", "spotify_isrc",
         "lyrics_status", "lyrics_format", "lrclib_id", "lrclib_duration", "lrclib_duration_delta_seconds",
         "lrclib_match_method", "lyrics_sha256", "embedded_artwork_width", "embedded_artwork_height",
         "embedded_artwork_format",

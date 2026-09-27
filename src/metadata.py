@@ -17,6 +17,7 @@ class NormalizedMetadata:
     artists: list[str]
     album: str | None
     album_artist: str | None
+    isrc: str | None
     track_number: str | None
     disc_number: str | None
     release_date: str | None
@@ -116,6 +117,18 @@ def _as_text(value: Any) -> str | None:
         text = value.strip()
         return text or None
     return str(value).strip() or None
+
+
+def normalize_isrc(value: Any) -> str | None:
+    """Normalize an ISRC for storage/comparison without inventing one."""
+    text = _as_text(value)
+    if not text:
+        return None
+    compact = re.sub(r"[\s-]+", "", text.upper())
+    match = re.search(r"(?<![A-Z0-9])([A-Z]{2}[A-Z0-9]{3}\d{7})(?![A-Z0-9])", compact)
+    if not match:
+        return None
+    return match.group(1)
 
 
 def _artists(value: Any) -> list[str]:
@@ -252,6 +265,18 @@ def _merge_fallbacks(info: Mapping[str, Any], playlist_item: Mapping[str, Any] |
     return merged
 
 
+def _extract_isrc(source: Mapping[str, Any]) -> str | None:
+    candidates = [source.get("isrc"), source.get("isrc_code"), source.get("recording_isrc")]
+    external_ids = source.get("external_ids")
+    if isinstance(external_ids, Mapping):
+        candidates.append(external_ids.get("isrc"))
+    for candidate in candidates:
+        normalized = normalize_isrc(candidate)
+        if normalized:
+            return normalized
+    return None
+
+
 def normalize_metadata(
     info: Mapping[str, Any],
     *,
@@ -270,6 +295,7 @@ def normalize_metadata(
 
     album = _album_name(source.get("album"))
     album_artist = _as_text(source.get("album_artist"))
+    isrc = _extract_isrc(source)
     release_date = _normalize_date(_first_nonempty(source, ("release_date", "release_year")))
     release_date_source = "yt-dlp.info_json:release_date" if source.get("release_date") else (
         "yt-dlp.info_json:release_year" if source.get("release_year") else None
@@ -297,6 +323,7 @@ def normalize_metadata(
         artists=artists,
         album=album,
         album_artist=album_artist,
+        isrc=isrc,
         track_number=_track_number(source),
         disc_number=_disc_number(source),
         release_date=release_date,

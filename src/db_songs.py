@@ -6,11 +6,13 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Iterator
 
-SCHEMA_VERSION = 6
+from .metadata import normalize_isrc
+
+SCHEMA_VERSION = 7
 
 SONG_COLUMNS = [
     "serial_number", "ytm_playlist_id", "title", "title_original", "primary_artist", "artist", "artists_json",
-    "album", "album_artist", "track_number", "disc_number", "release_date", "release_date_source", "upload_date",
+    "album", "album_artist", "isrc", "track_number", "disc_number", "release_date", "release_date_source", "upload_date",
     "upload_timestamp", "release_timestamp", "modified_date", "modified_timestamp", "description", "genre", "composer",
     "publisher", "copyright", "license", "comment", "language", "bpm", "compilation", "encoder", "duration",
     "source_duration", "source_ext", "source_container", "source_codec", "source_format_id", "source_format_note",
@@ -50,6 +52,7 @@ CREATE TABLE IF NOT EXISTS songs (
     artists_json TEXT,
     album TEXT,
     album_artist TEXT,
+    isrc TEXT,
     track_number TEXT,
     disc_number TEXT,
     release_date TEXT,
@@ -204,6 +207,7 @@ CREATE TABLE IF NOT EXISTS songs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_songs_isrc ON songs(isrc) WHERE isrc IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_songs_ytm_video_id ON songs(ytm_video_id);
 CREATE INDEX IF NOT EXISTS idx_songs_yt_video_id ON songs(yt_video_id);
 """
@@ -251,6 +255,9 @@ class SongsDB:
             record = {column: row[column] for column in row.keys() if column in SONG_COLUMNS}
             record.setdefault("title", "Untitled")
             record.setdefault("mp3_path", "")
+            # Older builds stored Spotify ISRC only in `spotify_isrc`; migrate it into
+            # the new canonical duplicate-identifier column instead of losing it.
+            record["isrc"] = normalize_isrc(record.get("isrc") or record.get("spotify_isrc"))
             source_raw = record.get("source_info_json")
             if not source_raw:
                 source_raw = json.dumps(record, ensure_ascii=False, sort_keys=True, default=str)
@@ -293,6 +300,24 @@ class SongsDB:
                 """UPDATE songs SET mp3_size=?, mp3_sha256=?, artwork_source_url=?, artwork_width=?, artwork_height=?, updated_at=CURRENT_TIMESTAMP WHERE serial_number=?""",
                 (mp3_size, mp3_sha256, artwork_source_url, artwork_width, artwork_height, serial_number),
             )
+
+    def find_by_isrc(self, isrc: str, *, exclude_serial: int | None = None) -> dict[str, Any] | None:
+        normalized = str(isrc or "").strip().upper()
+        if not normalized:
+            return None
+        with self.connect() as conn:
+            if exclude_serial is None:
+                row = conn.execute(
+                    "SELECT * FROM songs WHERE isrc=? ORDER BY serial_number ASC LIMIT 1",
+                    (normalized,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT * FROM songs WHERE isrc=? AND serial_number<>? ORDER BY serial_number ASC LIMIT 1",
+                    (normalized, int(exclude_serial)),
+                ).fetchone()
+            return dict(row) if row else None
+
 
     def get_by_serial(self, serial_number: int) -> dict[str, Any] | None:
         with self.connect() as conn:

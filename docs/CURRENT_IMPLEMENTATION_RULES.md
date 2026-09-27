@@ -1,12 +1,13 @@
 # Current Implementation Rules
 
-- No duplicate finding, duplicate matching, or duplicate resolution.
-- Spotify ISRC is metadata only.
-- Spotify search uses `title + album`; the first returned track whose duration is within the configured tolerance is selected.
-- When selected, Spotify album artwork uses the largest API image and is preserved byte-for-byte. No crop, resize, or recompression is performed.
-- LRCLIB uses only `GET /api/get`. There is no `/api/search` call or fallback.
-- Only synchronized lyrics are eligible.
-- Synced output gets MP3 + LRC + same-basename JSON in `songs/synced_lyrics/`.
-- No-synced output gets MP3 + same-basename JSON in `songs/no_synced_lyrics/`.
-- MP3 tags contain concise music metadata, YTMusic/YouTube/Spotify IDs and important URLs, artwork, and embedded synced lyrics.
-- Source descriptions, age-limit details, channel/uploader details, extractor internals, raw API objects, and other verbose information belong in the sidecar JSON.
+- Duplicate identification is ISRC-only.
+- Spotify ISRC is a metadata source and the preferred ISRC when Spotify enrichment returns one.
+- Source ISRC from yt-dlp may be used when Spotify does not supply one.
+- Missing/invalid ISRC means no duplicate lookup.
+- No title, artist, album, duration, YTMusic ID, YouTube ID, filename, hash, fuzzy, or heuristic duplicate matching.
+- Duplicate resolution is user-controlled: keep previous or keep current.
+- `keep_previous` -> current playlist status `duplicate`; existing retained song unchanged.
+- `keep_current` -> validated current song replaces the prior retained song; prior playlist serial returns to `pending`.
+- Spotify search uses `title + album`; first returned duration match within configured tolerance.
+- Spotify artwork uses the largest returned album image unchanged.
+- LRCLIB calls only `/api/get` and accepts synchronized lyrics only.

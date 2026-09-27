@@ -1,37 +1,19 @@
-# Implementation Analysis and Hardening Notes
-
-## Playlist ingestion
-
-A playlist item can exist without a usable YTMusic `videoId`. The implementation preserves the occurrence and permanent serial, records the original playlist-item metadata, marks it as unavailable, and does not attempt a download until a usable source URL exists. A later refresh can reuse the same serial when the source becomes usable.
+# Implementation Analysis
 
 ## Identity and duplicates
 
-There is no duplicate detection, duplicate matching, or duplicate resolution. Every playlist occurrence is independent. Spotify ISRC is ordinary metadata only.
+A playlist occurrence has a permanent serial number. Retained-song identity uses ISRC as the sole duplicate key. Canonical ISRC is stored in `songs.isrc` and indexed. Spotify ISRC is preferred when Spotify enrichment returns one; yt-dlp/source ISRC is the fallback. Missing or invalid ISRC skips duplicate matching.
 
-## Metadata architecture
+Duplicate handling is interactive. `keep_previous` marks the current playlist occurrence `duplicate` and preserves the existing retained row/file. `keep_current` builds and validates the new MP3 first, then uses one SQLite transaction to remove the prior retained row, insert the current row, mark the current playlist occurrence completed, and return the prior playlist serial to pending. The old physical artifacts are deleted only after that commit.
 
-The project deliberately separates three layers:
+## Spotify
 
-1. concise player-facing MP3 ID3 metadata;
-2. important external IDs and URLs in TXXX/UFID/WXXX;
-3. detailed/provenance data in a same-basename JSON sidecar.
+Spotify is optional. Search uses `title + album`; results are checked in returned order and the first result within the duration tolerance of the actual downloaded YTMusic audio is selected. The full album object supplies artwork and catalog metadata. Track external IDs can include ISRC. The Spotify ISRC is both embedded as normal metadata and used as the preferred duplicate identifier when present.
 
-The final MP3 has no raw source JSON, source description, age-limit data, or channel/uploader detail. The sidecar retains those details through normalized objects and complete raw API/source JSON.
+## Lyrics
 
-## Spotify enrichment
+Only LRCLIB `/api/get` is called. Only synchronized lyrics are accepted. The same synchronized content is written to the LRC sidecar file and embedded into the MP3 as SYLT plus USLT compatibility text.
 
-Spotify is optional. Search uses `title + album`. Results are examined in returned order and the first track whose `duration_ms` is within the configured tolerance is selected. The full album object supplies the largest cover image and additional catalog metadata such as release date, track/disc number, label, copyrights and ISRC.
+## MP3 and sidecar
 
-Spotify artwork is preserved without pixel modification. This follows Spotify's current developer documentation, which states that visual content must be kept in its original form.
-
-## LRCLIB
-
-Only `GET /api/get` is used. No `/api/search` request exists in the runtime flow. Requests use track title, artist, album and duration. Only timestamp-valid `syncedLyrics` are accepted.
-
-## Lyrics output
-
-With synced lyrics, the final folder contains MP3 + LRC + JSON. The MP3 contains the same synced lyrics as SYLT and a USLT plain-text compatibility frame. Without synced lyrics, only MP3 + JSON are produced and the MP3 contains no lyrics frames.
-
-## Finalization
-
-The output MP3 is tagged, reopened, validated, and hashed before promotion. The sidecar is written atomically. SQLite completion is committed only after the final MP3 exists.
+The MP3 contains concise player-facing fields, core IDs and URLs, canonical ISRC when available, artwork, and synchronized lyrics. Verbose source/API objects are retained in the same-basename JSON sidecar so the MP3 remains interoperable without becoming a raw metadata dump.

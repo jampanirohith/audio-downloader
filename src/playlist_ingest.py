@@ -224,9 +224,20 @@ class PlaylistIngestor:
                 continue
 
             serial = int(existing["serial_number"])
-            # Never downgrade a successfully retained occurrence merely because an upstream
-            # refresh temporarily reports it unavailable.
-            if not is_usable and existing.get("status") == "completed" and existing.get("ytm_video_id"):
+            # Never downgrade a successfully retained or intentionally deduplicated occurrence
+            # merely because ingestion refreshed the same usable source item.
+            existing_status = existing.get("status")
+            same_source = str(existing.get("ytm_video_id") or "") == str(track.get("video_id") or "") and bool(track.get("video_id"))
+            if not is_usable and existing_status == "completed" and existing.get("ytm_video_id"):
+                existing_count += 1
+                continue
+            if is_usable and existing_status in {"completed", "duplicate"} and same_source:
+                self.playlist_db.update_ingested_fields(
+                    serial_number=serial, playlist_position=position, ytm_playlist_id=playlist_id,
+                    ytm_video_id=track["video_id"], ytm_url=track["url"], title=track["title"],
+                    artist=track["artist"], album=track["album"], duration=track["duration"],
+                    ytm_playlist_item_json=track["raw_json"], status=existing_status, error_message=None,
+                )
                 existing_count += 1
                 continue
 
